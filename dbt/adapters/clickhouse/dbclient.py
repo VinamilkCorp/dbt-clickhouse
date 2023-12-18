@@ -1,10 +1,17 @@
 import uuid
 from abc import ABC, abstractmethod
+from typing import Dict
 
 from dbt.exceptions import DbtDatabaseError, FailedToConnectError
 
 from dbt.adapters.clickhouse.credentials import ClickHouseCredentials
 from dbt.adapters.clickhouse.logger import logger
+from dbt.adapters.clickhouse.query import quote_identifier
+from dbt.adapters.clickhouse.util import compare_versions
+
+LW_DELETE_SETTING = 'allow_experimental_lightweight_delete'
+ND_MUTATION_SETTING = 'allow_nondeterministic_mutations'
+DEDUP_WINDOW_SETTING = 'replicated_deduplication_window'
 
 
 def get_db_client(credentials: ClickHouseCredentials):
@@ -63,6 +70,7 @@ class ChClientWrapper(ABC):
             self._conn_settings['database_replicated_enforce_synchronous_settings'] = '1'
             self._conn_settings['insert_quorum'] = 'auto'
         self._conn_settings['mutations_sync'] = '2'
+        self._conn_settings['insert_distributed_sync'] = '1'
         self._client = self._create_client(credentials)
         check_exchange = credentials.check_exchange and not credentials.cluster_mode
         try:
@@ -75,6 +83,12 @@ class ChClientWrapper(ABC):
         except Exception as ex:
             self.close()
             raise ex
+        self._model_settings = {}
+        if (
+            not credentials.allow_automatic_deduplication
+            and compare_versions(self._server_version(), '22.7.1.2484') >= 0
+        ):
+            self._model_settings[DEDUP_WINDOW_SETTING] = '0'
 
     @abstractmethod
     def query(self, sql: str, **kwargs):
@@ -82,6 +96,10 @@ class ChClientWrapper(ABC):
 
     @abstractmethod
     def command(self, sql: str, **kwargs):
+        pass
+
+    @abstractmethod
+    def columns_in_query(self, sql: str, **kwargs):
         pass
 
     @abstractmethod
@@ -107,39 +125,58 @@ class ChClientWrapper(ABC):
     def _server_version(self):
         pass
 
+    def update_model_settings(self, model_settings: Dict[str, str]):
+        for key, value in self._model_settings.items():
+            if key not in model_settings:
+                model_settings[key] = value
+
     def _check_lightweight_deletes(self, requested: bool):
-        lw_deletes = self.get_ch_setting('allow_experimental_lightweight_delete')
-        if lw_deletes is None:
+        lw_deletes = self.get_ch_setting(LW_DELETE_SETTING)
+        nd_mutations = self.get_ch_setting(ND_MUTATION_SETTING)
+        if lw_deletes is None or nd_mutations is None:
             if requested:
                 logger.warning(
                     'use_lw_deletes requested but are not available on this ClickHouse server'
                 )
             return False, False
-        lw_deletes = int(lw_deletes)
-        if lw_deletes == 1:
+        lw_deletes = int(lw_deletes) > 0
+        if not lw_deletes:
+            try:
+                self.command(f'SET {LW_DELETE_SETTING} = 1')
+                self._conn_settings[LW_DELETE_SETTING] = '1'
+                lw_deletes = True
+            except DbtDatabaseError:
+                pass
+        nd_mutations = int(nd_mutations) > 0
+        if lw_deletes and not nd_mutations:
+            try:
+                self.command(f'SET {ND_MUTATION_SETTING} = 1')
+                self._conn_settings[ND_MUTATION_SETTING] = '1'
+                nd_mutations = True
+            except DbtDatabaseError:
+                pass
+        if lw_deletes and nd_mutations:
             return True, requested
-        if not requested:
-            return False, False
-        try:
-            self.command('SET allow_experimental_lightweight_delete = 1')
-            self.command('SET allow_nondeterministic_mutations = 1')
-            return True, True
-        except DbtDatabaseError as ex:
-            logger.warning(
-                'use_lw_deletes requested but cannot enable on this ClickHouse server %s', str(ex)
-            )
-            return False, False
+        if requested:
+            logger.warning('use_lw_deletes requested but cannot enable on this ClickHouse server')
+        return False, False
 
     def _ensure_database(self, database_engine, cluster_name) -> None:
         if not self.database:
             return
-        check_db = f'EXISTS DATABASE {self.database}'
+        check_db = f'EXISTS DATABASE {quote_identifier(self.database)}'
         try:
             db_exists = self.command(check_db)
             if not db_exists:
                 engine_clause = f' ENGINE {database_engine} ' if database_engine else ''
-                cluster_clause = f' ON CLUSTER {cluster_name} ' if cluster_name is not None else ''
-                self.command(f'CREATE DATABASE {self.database}{cluster_clause}{engine_clause}')
+                cluster_clause = (
+                    f' ON CLUSTER "{cluster_name}" '
+                    if cluster_name is not None and cluster_name.strip() != ''
+                    else ''
+                )
+                self.command(
+                    f'CREATE DATABASE IF NOT EXISTS {quote_identifier(self.database)}{cluster_clause}{engine_clause}'
+                )
                 db_exists = self.command(check_db)
                 if not db_exists:
                     raise FailedToConnectError(
@@ -162,7 +199,7 @@ class ChClientWrapper(ABC):
             table_id = str(uuid.uuid1()).replace('-', '')
             swap_tables = [f'__dbt_exchange_test_{x}_{table_id}' for x in range(0, 2)]
             for table in swap_tables:
-                self.command(create_cmd.format(table))
+                self.command(create_cmd.format(quote_identifier(table)))
             try:
                 self.command('EXCHANGE TABLES {} AND {}'.format(*swap_tables))
                 return True
@@ -180,7 +217,7 @@ class ChClientWrapper(ABC):
                     for table in swap_tables:
                         self.command(f'DROP TABLE IF EXISTS {table}')
                 except DbtDatabaseError:
-                    logger.info('Unexpected server exception dropping table', exc_info=True)
+                    logger.info('Unexpected server exception dropping table')
         except DbtDatabaseError:
-            logger.warning('Failed to run exchange test', exc_info=True)
+            logger.warning('Failed to run exchange test')
         return False

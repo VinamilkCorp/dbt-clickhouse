@@ -1,7 +1,7 @@
 import re
 import time
 from contextlib import contextmanager
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, Union
 
 import agate
 import dbt.exceptions
@@ -30,7 +30,7 @@ class ClickHouseConnectionManager(SQLConnectionManager):
             logger.debug('Error running SQL: {}', sql)
             if isinstance(exp, dbt.exceptions.DbtRuntimeError):
                 raise
-            raise dbt.exceptions.DbtRuntimeError from exp
+            raise dbt.exceptions.DbtRuntimeError('ClickHouse exception:  ' + str(exp)) from exp
 
     @classmethod
     def open(cls, connection):
@@ -73,7 +73,7 @@ class ClickHouseConnectionManager(SQLConnectionManager):
         return dbt.clients.agate_helper.table_from_data_flat(data, column_names)
 
     def execute(
-        self, sql: str, auto_begin: bool = False, fetch: bool = False
+        self, sql: str, auto_begin: bool = False, fetch: bool = False, limit: Optional[int] = None
     ) -> Tuple[AdapterResponse, agate.Table]:
         # Don't try to fetch result of clustered DDL responses, we don't know what to do with them
         if fetch and ddl_re.match(sql):
@@ -141,3 +141,8 @@ class ClickHouseConnectionManager(SQLConnectionManager):
 
     def commit(self):
         pass
+
+    @classmethod
+    def data_type_code_to_name(cls, type_code: Union[int, str]) -> str:
+        assert isinstance(type_code, int)
+        return ''
