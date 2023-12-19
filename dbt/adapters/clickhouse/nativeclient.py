@@ -34,7 +34,9 @@ class ChNativeClient(ChClientWrapper):
 
     def columns_in_query(self, sql: str, **kwargs) -> List[ClickHouseColumn]:
         try:
-            _, columns = self._client.execute(f'{sql} LIMIT 0', with_column_types=True)
+            _, columns = self._client.execute(
+                f"SELECT * FROM ({sql}) LIMIT 0", with_column_types=True
+            )
             return [ClickHouseColumn.create(column[0], column[1]) for column in columns]
         except clickhouse_driver.errors.Error as ex:
             raise DbtDatabaseError(str(ex).strip()) from ex
@@ -42,12 +44,12 @@ class ChNativeClient(ChClientWrapper):
     def get_ch_setting(self, setting_name):
         try:
             result = self._client.execute(
-                f"SELECT value FROM system.settings WHERE name = '{setting_name}'"
+                f"SELECT value, readonly FROM system.settings WHERE name = '{setting_name}'"
             )
         except clickhouse_driver.errors.Error as ex:
             logger.warn('Unexpected error retrieving ClickHouse server setting', ex)
             return None
-        return result[0][0] if result else None
+        return (result[0][0], result[0][1]) if result else (None, 0)
 
     def close(self):
         self._client.disconnect()
