@@ -2,8 +2,8 @@ from typing import List
 
 import clickhouse_connect
 from clickhouse_connect.driver.exceptions import DatabaseError, OperationalError
-from dbt.exceptions import DbtDatabaseError
-from dbt.version import __version__ as dbt_version
+from dbt.adapters.__about__ import version as dbt_adapters_version
+from dbt_common.exceptions import DbtDatabaseError
 
 from dbt.adapters.clickhouse import ClickHouseColumn
 from dbt.adapters.clickhouse.__version__ import version as dbt_clickhouse_version
@@ -25,7 +25,10 @@ class ChHttpClient(ChClientWrapper):
 
     def columns_in_query(self, sql: str, **kwargs) -> List[ClickHouseColumn]:
         try:
-            query_result = self._client.query(f"SELECT * FROM ({sql}) LIMIT 0", **kwargs)
+            query_result = self._client.query(
+                f"SELECT * FROM ( \n" f"{sql} \n" f") LIMIT 0",
+                **kwargs,
+            )
             return [
                 ClickHouseColumn.create(name, ch_type.name)
                 for name, ch_type in zip(query_result.column_names, query_result.column_types)
@@ -57,7 +60,7 @@ class ChHttpClient(ChClientWrapper):
                 compress=False if credentials.compression == '' else bool(credentials.compression),
                 connect_timeout=credentials.connect_timeout,
                 send_receive_timeout=credentials.send_receive_timeout,
-                client_name=f'dbt/{dbt_version} dbt-clickhouse/{dbt_clickhouse_version}',
+                client_name=f'dbt-adapters/{dbt_adapters_version} dbt-clickhouse/{dbt_clickhouse_version}',
                 verify=credentials.verify,
                 query_limit=0,
                 settings=self._conn_settings,

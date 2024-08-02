@@ -5,6 +5,7 @@
   {% endif %}
 
   {%- set local_suffix = adapter.get_clickhouse_local_suffix() -%}
+  {%- set local_db_prefix = adapter.get_clickhouse_local_db_prefix() -%}
 
   {%- set existing_relation = load_cached_relation(this) -%}
   {%- set target_relation = this.incorporate(type='table') -%}
@@ -14,8 +15,8 @@
      {% do exceptions.raise_compiler_error('To use distributed materialization cluster setting in dbt profile must be set') %}
   {% endif %}
 
-  {% set existing_relation_local = existing_relation.incorporate(path={"identifier": this.identifier + local_suffix}) if existing_relation is not none else none %}
-  {% set target_relation_local = target_relation.incorporate(path={"identifier": this.identifier + local_suffix}) if target_relation is not none else none %}
+  {% set existing_relation_local = existing_relation.incorporate(path={"identifier": this.identifier + local_suffix, "schema": local_db_prefix + this.schema}) if existing_relation is not none else none %}
+  {% set target_relation_local = target_relation.incorporate(path={"identifier": this.identifier + local_suffix, "schema": local_db_prefix + this.schema}) if target_relation is not none else none %}
 
   {%- set backup_relation = none -%}
   {%- set preexisting_backup_relation = none -%}
@@ -58,8 +59,8 @@
     {% do run_query(create_empty_table_from_relation(intermediate_relation, view_relation)) or '' %}
     {{ adapter.rename_relation(existing_relation_local, backup_relation) }}
     {{ adapter.rename_relation(intermediate_relation, target_relation_local) }}
-    {{ create_distributed_table(target_relation, target_relation_local) }}
-  {% endif %}
+  {% endif %}  
+    {% do run_query(create_distributed_table(target_relation, target_relation_local)) or '' %}
   {% do run_query(clickhouse__insert_into(target_relation, sql)) or '' %}
   {{ drop_relation_if_exists(view_relation) }}
   -- cleanup
@@ -85,8 +86,8 @@
    {%- set cluster = cluster[1:-1] -%}
    {%- set sharding = config.get('sharding_key') -%}
 
-    create table {{ relation }} {{ on_cluster_clause(relation) }} as {{ local_relation }}
-    ENGINE = Distributed('{{ cluster}}', '{{ relation.schema }}', '{{ local_relation.name }}'
+    create or replace table {{ relation }} {{ on_cluster_clause(relation) }} as {{ local_relation }}
+    ENGINE = Distributed('{{ cluster}}', '{{ local_relation.schema }}', '{{ local_relation.name }}'
     {%- if sharding is not none and sharding.strip() != '' -%}
         , {{ sharding }}
     {%- else %}
@@ -98,6 +99,7 @@
 {% macro create_empty_table_from_relation(relation, source_relation) -%}
   {%- set sql_header = config.get('sql_header', none) -%}
   {%- set columns = adapter.get_columns_in_relation(source_relation) | list -%}
+   
 
   {%- set col_list = [] -%}
   {% for col in columns %}
@@ -109,7 +111,7 @@
   {{ on_cluster_clause(relation) }} (
       {{col_list | join(', ')}}
   )
-
+  
   {{ engine_clause() }}
   {{ order_cols(label="order by") }}
   {{ primary_key_clause(label="primary key") }}
@@ -120,6 +122,7 @@
 {% macro create_distributed_local_table(distributed_relation, shard_relation, structure_relation, sql_query=none) -%}
   {{ drop_relation_if_exists(shard_relation) }}
   {{ drop_relation_if_exists(distributed_relation) }}
+  {{ create_schema(shard_relation) }}
   {% do run_query(create_empty_table_from_relation(shard_relation, structure_relation)) or '' %}
   {% do run_query(create_distributed_table(distributed_relation, shard_relation)) or '' %}
   {% if sql_query is not none %}

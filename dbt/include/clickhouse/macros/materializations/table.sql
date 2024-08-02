@@ -121,6 +121,12 @@
   {%- endif %}
 {%- endmacro -%}
 
+{% macro ttl_config(label) %}
+  {%- if config.get("ttl")%}
+    {{ label }} {{ config.get("ttl") }}
+  {%- endif %}
+{%- endmacro -%}
+
 {% macro on_cluster_clause(relation, force_sync) %}
   {% set active_cluster = adapter.get_clickhouse_cluster_name() %}
   {%- if active_cluster is not none and relation.should_on_cluster %}
@@ -135,7 +141,7 @@
 {% macro clickhouse__create_table_as(temporary, relation, sql) -%}
     {% set has_contract = config.get('contract').enforced %}
     {% set create_table = create_table_or_empty(temporary, relation, sql, has_contract) %}
-    {% if adapter.is_before_version('22.7.1.2484') -%}
+    {% if adapter.is_before_version('22.7.1.2484') or temporary -%}
         {{ create_table }}
     {%- else %}
         {% call statement('create_table_empty') %}
@@ -153,8 +159,6 @@
     {% if temporary -%}
         create temporary table {{ relation }}
         engine Memory
-        {{ order_cols(label="order by") }}
-        {{ partition_cols(label="partition by") }}
         {{ adapter.get_model_settings(model) }}
         as (
           {{ sql }}
@@ -170,6 +174,7 @@
         {{ order_cols(label="order by") }}
         {{ primary_key_clause(label="primary key") }}
         {{ partition_cols(label="partition by") }}
+        {{ ttl_config(label="ttl")}}
         {{ adapter.get_model_settings(model) }}
 
         {%- if not has_contract %}
@@ -195,6 +200,6 @@
           SELECT {{ dest_cols_csv }} FROM ( {{ sql }} )
   {%- else -%}
       {{ sql }}
-  {{ adapter.get_model_query_settings(model) }}
   {%- endif -%}
+  {{ adapter.get_model_query_settings(model) }}
 {%- endmacro %}

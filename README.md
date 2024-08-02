@@ -67,23 +67,25 @@ your_profile_name:
       port: [8123]  # If not set, defaults to 8123, 8443, 9000, 9440 depending on the secure and driver settings 
       user: [default] # User for all database operations
       password: [<empty string>] # Password for the user
-      cluster: [<empty string>] If set, certain DDL/table operations will be executed with the `ON CLUSTER` clause using this cluster. Distributed materializations require this setting to work. See the following ClickHouse Cluster section for more details.
+      cluster: [<empty string>] # If set, certain DDL/table operations will be executed with the `ON CLUSTER` clause using this cluster. Distributed materializations require this setting to work. See the following ClickHouse Cluster section for more details.
       verify: [True] # Validate TLS certificate if using TLS/SSL
       secure: [False] # Use TLS (native protocol) or HTTPS (http protocol)
       retries: [1] # Number of times to retry a "retriable" database exception (such as a 503 'Service Unavailable' error)
-      compression: [<empty string>] Use gzip compression if truthy (http), or compression type for a native connection
+      compression: [<empty string>] # Use gzip compression if truthy (http), or compression type for a native connection
       connect_timeout: [10] # Timeout in seconds to establish a connection to ClickHouse
       send_receive_timeout: [300] # Timeout in seconds to receive data from the ClickHouse server
       cluster_mode: [False] # Use specific settings designed to improve operation on Replicated databases (recommended for ClickHouse Cloud)
-      use_lw_deletes: [False] Use the strategy `delete+insert` as the default incremental strategy.
+      use_lw_deletes: [False] # Use the strategy `delete+insert` as the default incremental strategy.
       check_exchange: [True] # Validate that clickhouse support the atomic EXCHANGE TABLES command.  (Not needed for most ClickHouse versions)
-      local_suffix [_local] # Table suffix of local tables on shards for distributed materializations.
-      allow_automatic_deduplication [False] # Enable ClickHouse automatic deduplication for Replicated tables
+      local_suffix: [_local] # Table suffix of local tables on shards for distributed materializations.
+      local_db_prefix: [<empty string>] # Database prefix of local tables on shards for distributed materializations. If empty, it uses the same database as the distributed table.
+      allow_automatic_deduplication: [False] # Enable ClickHouse automatic deduplication for Replicated tables
+      tcp_keepalive: [False] # Native client only, specify TCP keepalive configuration. Specify custom keepalive settings as [idle_time_sec, interval_sec, probes].
       custom_settings: [{}] # A dictionary/mapping of custom ClickHouse settings for the connection - default is empty.
       
       # Native (clickhouse-driver) connection settings
-      sync_request_timeout: [5] Timeout for server ping
-      compress_block_size: [1048576] Compression block size if compression is enabled
+      sync_request_timeout: [5] # Timeout for server ping
+      compress_block_size: [1048576] # Compression block size if compression is enabled
       
 ```
 
@@ -102,6 +104,7 @@ your_profile_name:
 | incremental_predicates | Additional conditions to be applied to the incremental materialization (only applied to `delete+insert` strategy                                                                                                                                       |                |
 | settings               | A map/dictionary of "TABLE" settings to be used to DDL statements like 'CREATE TABLE' with this model                                                                                                                                                  |                |
 | query_settings         | A map/dictionary of ClickHouse user level settings to be used with `INSERT` or `DELETE` statements in conjunction with this model                                                                                                                      |                |
+| ttl                    | A TTL expression to be used with the table.  The TTL expression is a string that can be used to specify the TTL for the table.                                                                                                                         |                |
 
 ## ClickHouse Cluster 
 
@@ -156,8 +159,7 @@ operations, because they don't require rewriting ClickHouse data parts.  The inc
 incremental materializations that perform significantly better than the "legacy" strategy.  However, there are important caveats to using this strategy:
 - Lightweight deletes must be enabled on your ClickHouse server using the setting `allow_experimental_lightweight_delete=1` or you 
 must set `use_lw_deletes=true` in your profile (which will enable that setting for your dbt sessions)
-- As suggested by the setting name, lightweight delete functionality is still experimental and there are still known issues that must be resolved before the feature is considered production ready,
-so usage should be limited to datasets that are easily recreated
+- Lightweight deletes are now production ready, but there may be performance and other problems on ClickHouse versions earlier than 23.3.
 - This strategy operates directly on the affected table/relation (with creating any intermediate or temporary tables), so if there is an issue during the operation, the
 data in the incremental model is likely to be in an invalid state
 - When using lightweight deletes, dbt-clickhouse enabled the setting `allow_nondeterministic_mutations`.  In some very rare cases using non-deterministic incremental_predicates
@@ -180,6 +182,7 @@ The following macros are included to facilitate creating ClickHouse specific tab
 - `order_cols` -- Uses the `order_by` model configuration to assign a ClickHouse order by/sorting key.  If not specified ClickHouse will use an empty tuple() and the table will be unsorted
 - `primary_key_clause` -- Uses the `primary_key` model configuration property to assign a ClickHouse primary key.  By default, primary key is set and ClickHouse will use the order by clause as the primary key. 
 - `on_cluster_clause` -- Uses the `cluster` profile property to add an `ON CLUSTER` clause to certain dbt-operations: distributed materializations, views creation, database creation.
+- `ttl_config` -- Uses the `ttl` model configuration property to assign a ClickHouse table TTL expression.  No TTL is assigned by default.
 
 ### s3Source Helper Macro
 
@@ -213,6 +216,10 @@ no corresponding REFRESH operation).  Instead, it acts as an "insert trigger", a
 "transformation" in the view definition on rows inserted into the source table.  See the [test file]
 (https://github.com/ClickHouse/dbt-clickhouse/blob/main/tests/integration/adapter/materialized_view/test_materialized_view.py)  for an introductory example
 of how to use this functionality.
+
+# Dictionary materializations (experimental)
+See the tests in https://github.com/ClickHouse/dbt-clickhouse/blob/main/tests/integration/adapter/dictionary/test_dictionary.py for examples of how to
+implement materializations for ClickHouse dictionaries 
 
 # Distributed materializations
 

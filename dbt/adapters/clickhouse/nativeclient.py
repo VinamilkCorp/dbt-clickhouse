@@ -3,8 +3,8 @@ from typing import List
 import clickhouse_driver
 import pkg_resources
 from clickhouse_driver.errors import NetworkError, SocketTimeoutError
-from dbt.exceptions import DbtDatabaseError
-from dbt.version import __version__ as dbt_version
+from dbt.adapters.__about__ import version as dbt_adapters_version
+from dbt_common.exceptions import DbtDatabaseError
 
 from dbt.adapters.clickhouse import ClickHouseColumn, ClickHouseCredentials
 from dbt.adapters.clickhouse.__version__ import version as dbt_clickhouse_version
@@ -35,7 +35,8 @@ class ChNativeClient(ChClientWrapper):
     def columns_in_query(self, sql: str, **kwargs) -> List[ClickHouseColumn]:
         try:
             _, columns = self._client.execute(
-                f"SELECT * FROM ({sql}) LIMIT 0", with_column_types=True
+                f"SELECT * FROM ( \n" f"{sql} \n" f") LIMIT 0",
+                with_column_types=True,
             )
             return [ClickHouseColumn.create(column[0], column[1]) for column in columns]
         except clickhouse_driver.errors.Error as ex:
@@ -60,7 +61,7 @@ class ChNativeClient(ChClientWrapper):
             port=credentials.port,
             user=credentials.user,
             password=credentials.password,
-            client_name=f'dbt/{dbt_version} dbt-clickhouse/{dbt_clickhouse_version} clickhouse-driver/{driver_version}',
+            client_name=f'dbt-adapters/{dbt_adapters_version} dbt-clickhouse/{dbt_clickhouse_version} clickhouse-driver/{driver_version}',
             secure=credentials.secure,
             verify=credentials.verify,
             connect_timeout=credentials.connect_timeout,
@@ -68,6 +69,7 @@ class ChNativeClient(ChClientWrapper):
             sync_request_timeout=credentials.sync_request_timeout,
             compress_block_size=credentials.compress_block_size,
             compression=False if credentials.compression == '' else credentials.compression,
+            tcp_keepalive=credentials.tcp_keepalive,
             settings=self._conn_settings,
         )
         try:
